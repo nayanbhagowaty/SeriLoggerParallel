@@ -1,8 +1,6 @@
 ﻿using Crawler;
 using Microsoft.Extensions.Logging;
 using Serilog;
-using Serilog.Core;
-using ILogger = Microsoft.Extensions.Logging.ILogger;
 
 namespace serilogger
 {
@@ -11,11 +9,7 @@ namespace serilogger
         static async Task Main(string[] args)
         {
             // Configure Serilog for general logging
-            Log.Logger = new LoggerConfiguration()
-                .MinimumLevel.Debug().Enrich.FromLogContext()
-                .WriteTo.Console()
-                .WriteTo.File("logs/general.log", rollingInterval: RollingInterval.Day,outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj} {Properties:j}{NewLine}{Exception}")
-                .CreateLogger();
+            ConfigureLogger("logs/general.log");
 
             using var loggerFactory = LoggerFactory.Create(builder =>
             {
@@ -25,33 +19,9 @@ namespace serilogger
             // General logger for the crawler
             var crawlerLogger = loggerFactory.CreateLogger<WebCrawler>();
 
-            // Dictionary to manage domain-specific loggers
-            var domainLoggers = new Dictionary<string, ILogger>();
-
-            ILogger GetDomainLogger(string domain)
-            {
-                if (!domainLoggers.TryGetValue(domain, out var logger))
-                {
-                    // Create a new logger for the domain
-                    var domainLogger = new LoggerConfiguration()
-                        .MinimumLevel.Debug().Enrich.FromLogContext()
-                        .WriteTo.File($"logs/{domain}.log", rollingInterval: RollingInterval.Day,outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj} {Properties:j}{NewLine}{Exception}")
-                        .CreateLogger();
-
-                    logger = new LoggerFactory()
-                        .AddSerilog(domainLogger)
-                        .CreateLogger($"DomainLogger-{domain}");
-
-                    domainLoggers[domain] = logger;
-                }
-
-                return logger;
-            }
-
-            // Instantiate the crawler
+            
             var crawler = new WebCrawler(maxConcurrency: 10, crawlerLogger);
 
-            // URLs to crawl
             var urls = new List<string>
             {
                 "https://example.com",
@@ -59,20 +29,72 @@ namespace serilogger
                 "https://microsoft.com",
                 "https://nonexistent.com",
             };
-
-            // Start crawling
-            var cancellationTokenSource = new CancellationTokenSource();
-
-            //var results = await crawler.CrawlAsync(urls, GetDomainLogger, cancellationTokenSource.Token);
-
             foreach (var url in urls)
             {
-                using(crawlerLogger.BeginScope($"URL: {url}"))
-                await crawler.CrawlAsync(url, cancellationTokenSource.Token);
+                var cancellationTokenSource = new CancellationTokenSource();
+                using (crawlerLogger.BeginScope(new Dictionary<string, object>
+                {
+                    ["Scope"] = $"URL: {url}",
+                    ["Domain"] = new Uri(url).Host
+                }))
+                {
+                    await crawler.CrawlAsync(url, cancellationTokenSource.Token);
+                }
             }
-
-            // Ensure logs are flushed
             Log.CloseAndFlush();
+        }
+        static string GetLogFilePath(string url)
+        {
+            var file = new Uri(url).Host.Replace("www.", "");
+            return $"logs/{file}.log";
+        }
+        static void ConfigureLogger(string logFilePath)
+        {
+            // Configure Serilog for general logging with conditional file sinks
+            Log.Logger = new LoggerConfiguration()
+                .MinimumLevel.Debug()
+                .Enrich.FromLogContext()
+                .WriteTo.Console()
+                // General log file for all logs
+                .WriteTo.File("logs/general.log",
+                    rollingInterval: RollingInterval.Day,
+                    outputTemplate: "[{Timestamp:HH:mm} {Level}] {Message} {Properties}{NewLine}{Exception}")
+                // Conditional logger for specific domains
+                .WriteTo.Logger(lc => lc
+                    .Filter.ByIncludingOnly(evt =>
+                        evt.Properties.ContainsKey("Scope") &&
+                        evt.Properties["Scope"].ToString().Contains("google.com"))
+                    .WriteTo.File("logs/google.log",
+                        rollingInterval: RollingInterval.Day,
+                        outputTemplate: "[{Timestamp:HH:mm} {Level}] {Message} {Properties}{NewLine}{Exception}"))
+                .WriteTo.Logger(lc => lc
+                    .Filter.ByIncludingOnly(evt =>
+                        evt.Properties.ContainsKey("Scope") &&
+                        evt.Properties["Scope"].ToString().Contains("microsoft.com"))
+                    .WriteTo.File("logs/microsoft.log",
+                        rollingInterval: RollingInterval.Day,
+                        outputTemplate: "[{Timestamp:HH:mm} {Level}] {Message} {Properties}{NewLine}{Exception}"))
+                .WriteTo.Logger(lc => lc
+                    .Filter.ByIncludingOnly(evt =>
+                        evt.Properties.ContainsKey("Scope") &&
+                        evt.Properties["Scope"].ToString().Contains("example.com"))
+                    .WriteTo.File("logs/google.log",
+                        rollingInterval: RollingInterval.Day,
+                        outputTemplate: "[{Timestamp:HH:mm} {Level}] {Message} {Properties}{NewLine}{Exception}"))
+                .WriteTo.Logger(lc => lc
+                    .Filter.ByIncludingOnly(evt =>
+                        evt.Properties.ContainsKey("Scope") &&
+                        evt.Properties["Scope"].ToString().Contains("nonexistent.com"))
+                    .WriteTo.File("logs/microsoft.log",
+                        rollingInterval: RollingInterval.Day,
+                        outputTemplate: "[{Timestamp:HH:mm} {Level}] {Message} {Properties}{NewLine}{Exception}"))
+                // Error logger for failed crawls
+                //.WriteTo.Logger(lc => lc
+                //    .Filter.ByIncludingOnly(evt => evt.Level == LogEventLevel.Error)
+                //    .WriteTo.File("logs/errors.log",
+                //        rollingInterval: RollingInterval.Day,
+                //        outputTemplate: "[{Timestamp:HH:mm} {Level}] {Message} {Properties}{NewLine}{Exception}"))
+                .CreateLogger();
         }
     }
 }
