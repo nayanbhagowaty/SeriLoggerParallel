@@ -1,5 +1,6 @@
 ﻿namespace Crawler
 {
+    using HtmlAgilityPack;
     using Microsoft.Extensions.Logging;
     using Serilog;
     using System;
@@ -12,17 +13,15 @@
 
     public class WebCrawler
     {
-        // Configuration properties
         public int MaxConcurrency { get; set; } = 5;
         public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(30);
         public string UserAgent { get; set; } = "WebCrawler/1.0";
-        //private readonly ILogger<WebCrawler> _logger;
 
-        // Internal fields
         private readonly HttpClient _httpClient;
         private readonly SemaphoreSlim _semaphore;
-        private readonly ILoggerFactory _loggerFactory;
-        public WebCrawler(int maxConcurrency, ILoggerFactory loggerFactory)
+        private readonly ILogger<WebCrawler> _logger;
+
+        public WebCrawler(int maxConcurrency, ILogger<WebCrawler> logger)
         {
             MaxConcurrency = maxConcurrency;
             _httpClient = new HttpClient
@@ -31,10 +30,11 @@
             };
             _httpClient.DefaultRequestHeaders.Add("User-Agent", UserAgent);
             _semaphore = new SemaphoreSlim(MaxConcurrency);
-            _loggerFactory = loggerFactory;
+            _logger = logger;
+            _logger.LogInformation("Started logging.... ");
         }
 
-        public async Task<ConcurrentDictionary<string, string>> CrawlAsync(IEnumerable<string> urls, CancellationToken cancellationToken = default)
+        public async Task<ConcurrentDictionary<string, string>> CrawlAsync(IEnumerable<string> urls, Func<string, ILogger> GetLogger, CancellationToken cancellationToken = default)
         {
             var results = new ConcurrentDictionary<string, string>();
             var tasks = new List<Task>();
@@ -45,25 +45,18 @@
 
                 tasks.Add(Task.Run(async () =>
                 {
+                    var domainLogger = GetLogger(new Uri(url).Host.Replace("www.", ""));
                     try
                     {
-                        var domain = new Uri(url).Host.Replace("www.", "");
-                        var logger = CreateDomainLogger(domain);
-
-                        logger.LogInformation("Starting crawl for URL: {Url}", url);
-
+                        domainLogger.LogInformation("Starting crawl for URL: {Url}", url);
                         var content = await FetchContentAsync(url, cancellationToken);
                         results[url] = content;
-
-                        logger.LogInformation("Successfully fetched content for URL: {Url}", url);
-                        logger.LogInformation(content);
+                        domainLogger.LogInformation("Successfully fetched content for URL: {Url}", url);
+                        domainLogger.LogInformation(content);
                     }
                     catch (Exception ex)
                     {
-                        var domain = new Uri(url).Host.Replace("www.", "");
-                        var logger = CreateDomainLogger(domain);
-
-                        logger.LogError(ex, "Error fetching URL: {Url}", url);
+                        domainLogger.LogError(ex, "Error fetching URL: {Url}", url);
                         results[url] = $"Error: {ex.Message}";
                     }
                     finally
@@ -74,7 +67,43 @@
             }
 
             await Task.WhenAll(tasks);
+            _logger.LogInformation("Ended logging.... ");
             return results;
+        }
+
+        public async Task CrawlAsync(string url, CancellationToken cancellationToken = default)
+        {
+            var tasks = new List<Task>();
+            await _semaphore.WaitAsync(cancellationToken);
+
+            tasks.Add(Task.Run(async () =>
+            {
+                try
+                {
+                    _logger.LogInformation("Starting crawl for URL: {Url}", url);
+                    var content = await FetchContentAsync(url, cancellationToken);
+                    _logger.LogInformation("Successfully fetched content for URL: {Url}", url);
+                    _logger.LogInformation($"Title: {InnerText("title",content)}");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error fetching URL: {Url}", url);
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }, cancellationToken));
+
+            await Task.WhenAll(tasks);
+            _logger.LogInformation("Ended logging.... ");
+        }
+        private string InnerText(string tag, string content)
+        {
+            var document = new HtmlDocument();
+            document.LoadHtml(content);
+            var node = document.DocumentNode.SelectSingleNode($"//{tag}");
+            return node != null ? node.InnerText : "";
         }
 
         private async Task<string> FetchContentAsync(string url, CancellationToken cancellationToken)
@@ -82,16 +111,6 @@
             using var response = await _httpClient.GetAsync(url, cancellationToken);
             response.EnsureSuccessStatusCode();
             return await response.Content.ReadAsStringAsync();
-        }
-        private ILogger CreateDomainLogger(string domain)
-        {
-            // Create a dynamic logger for each domain
-            var logger = new LoggerConfiguration()
-                .MinimumLevel.Debug()
-                .WriteTo.File($"logs/{domain}.log", rollingInterval: RollingInterval.Day)
-                .CreateLogger();
-
-            return new LoggerFactory().AddSerilog(logger).CreateLogger<WebCrawler>();
         }
     }
 }
