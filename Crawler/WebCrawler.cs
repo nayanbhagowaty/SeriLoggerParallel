@@ -1,19 +1,11 @@
-﻿namespace Crawler
-{
-    using HtmlAgilityPack;
-    using Microsoft.Extensions.Logging;
-    using Serilog;
-    using System;
-    using System.Collections.Concurrent;
-    using System.Collections.Generic;
-    using System.Net.Http;
-    using System.Threading;
-    using System.Threading.Tasks;
-    using ILogger = Microsoft.Extensions.Logging.ILogger;
+﻿using HtmlAgilityPack;
+using Microsoft.Extensions.Logging;
 
-    public class WebCrawler
+namespace Crawler
+{
+    public class WebCrawler: IWebCrawler
     {
-        public int MaxConcurrency { get; set; } = 5;
+        public int MaxConcurrency { get; set; } = 10;
         public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(30);
         public string UserAgent { get; set; } = "WebCrawler/1.0";
 
@@ -21,9 +13,8 @@
         private readonly SemaphoreSlim _semaphore;
         private readonly ILogger<WebCrawler> _logger;
 
-        public WebCrawler(int maxConcurrency, ILogger<WebCrawler> logger)
+        public WebCrawler(ILogger<WebCrawler> logger)
         {
-            MaxConcurrency = maxConcurrency;
             _httpClient = new HttpClient
             {
                 Timeout = Timeout
@@ -34,42 +25,42 @@
             _logger.LogInformation("Started logging.... ");
         }
 
-        public async Task<ConcurrentDictionary<string, string>> CrawlAsync(IEnumerable<string> urls, Func<string, ILogger> GetLogger, CancellationToken cancellationToken = default)
-        {
-            var results = new ConcurrentDictionary<string, string>();
-            var tasks = new List<Task>();
+        //public async Task<ConcurrentDictionary<string, string>> CrawlAsync(IEnumerable<string> urls, Func<string, ILogger> GetLogger, CancellationToken cancellationToken = default)
+        //{
+        //    var results = new ConcurrentDictionary<string, string>();
+        //    var tasks = new List<Task>();
 
-            foreach (var url in urls)
-            {
-                await _semaphore.WaitAsync(cancellationToken);
+        //    foreach (var url in urls)
+        //    {
+        //        await _semaphore.WaitAsync(cancellationToken);
 
-                tasks.Add(Task.Run(async () =>
-                {
-                    var domainLogger = GetLogger(new Uri(url).Host.Replace("www.", ""));
-                    try
-                    {
-                        domainLogger.LogInformation("Starting crawl for URL: {Url}", url);
-                        var content = await FetchContentAsync(url, cancellationToken);
-                        results[url] = content;
-                        domainLogger.LogInformation("Successfully fetched content for URL: {Url}", url);
-                        domainLogger.LogInformation(content);
-                    }
-                    catch (Exception ex)
-                    {
-                        domainLogger.LogError(ex, "Error fetching URL: {Url}", url);
-                        results[url] = $"Error: {ex.Message}";
-                    }
-                    finally
-                    {
-                        _semaphore.Release();
-                    }
-                }, cancellationToken));
-            }
+        //        tasks.Add(Task.Run(async () =>
+        //        {
+        //            var domainLogger = GetLogger(new Uri(url).Host.Replace("www.", ""));
+        //            try
+        //            {
+        //                domainLogger.LogInformation("Starting crawl for URL: {Url}", url);
+        //                var content = await FetchContentAsync(url, cancellationToken);
+        //                results[url] = content;
+        //                domainLogger.LogInformation("Successfully fetched content for URL: {Url}", url);
+        //                domainLogger.LogInformation(content);
+        //            }
+        //            catch (Exception ex)
+        //            {
+        //                domainLogger.LogError(ex, "Error fetching URL: {Url}", url);
+        //                results[url] = $"Error: {ex.Message}";
+        //            }
+        //            finally
+        //            {
+        //                _semaphore.Release();
+        //            }
+        //        }, cancellationToken));
+        //    }
 
-            await Task.WhenAll(tasks);
-            _logger.LogInformation("Ended logging.... ");
-            return results;
-        }
+        //    await Task.WhenAll(tasks);
+        //    _logger.LogInformation("Ended logging.... ");
+        //    return results;
+        //}
 
         public async Task CrawlAsync(string url, CancellationToken cancellationToken = default)
         {
@@ -112,5 +103,10 @@
             response.EnsureSuccessStatusCode();
             return await response.Content.ReadAsStringAsync();
         }
+    }
+
+    public interface IWebCrawler
+    {
+        Task CrawlAsync(string url, CancellationToken cancellationToken = default);
     }
 }
