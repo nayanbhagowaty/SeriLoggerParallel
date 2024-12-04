@@ -2,7 +2,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Serilog;
-using System;
+using System.Text.RegularExpressions;
 
 namespace SeriLoggerFilter
 {
@@ -46,11 +46,7 @@ namespace SeriLoggerFilter
             }
             Log.CloseAndFlush();
         }
-        static string GetLogFilePath(string url)
-        {
-            var file = new Uri(url).Host.Replace("www.", "");
-            return $"logs/{file}.log";
-        }
+        
         static void ConfigureLogger(string logFilePath)
         {
             // Configure Serilog for general logging with conditional file sinks
@@ -58,39 +54,40 @@ namespace SeriLoggerFilter
                 .MinimumLevel.Debug()
                 .Enrich.FromLogContext()
                 .WriteTo.Console()
-                // General log file for all logs
-                .WriteTo.File("logs/general.log",
-                    rollingInterval: RollingInterval.Day,
-                    outputTemplate: "[{Timestamp:HH:mm} {Level}] {Message} {Properties}{NewLine}{Exception}")
-                // Conditional logger for specific domains
-                .WriteTo.Logger(lc => lc
-                    .Filter.ByIncludingOnly(evt =>
-                        evt.Properties.ContainsKey("Scope") &&
-                        evt.Properties["Scope"].ToString().Contains("google.com"))
-                    .WriteTo.File("logs/google.log",
-                        rollingInterval: RollingInterval.Day,
-                        outputTemplate: "[{Timestamp:HH:mm} {Level}] {Message} {Properties}{NewLine}{Exception}"))
-                .WriteTo.Logger(lc => lc
-                    .Filter.ByIncludingOnly(evt =>
-                        evt.Properties.ContainsKey("Scope") &&
-                        evt.Properties["Scope"].ToString().Contains("microsoft.com"))
-                    .WriteTo.File("logs/microsoft.log",
-                        rollingInterval: RollingInterval.Day,
-                        outputTemplate: "[{Timestamp:HH:mm} {Level}] {Message} {Properties}{NewLine}{Exception}"))
-                .WriteTo.Logger(lc => lc
-                    .Filter.ByIncludingOnly(evt =>
-                        evt.Properties.ContainsKey("Scope") &&
-                        evt.Properties["Scope"].ToString().Contains("example.com"))
-                    .WriteTo.File("logs/google.log",
-                        rollingInterval: RollingInterval.Day,
-                        outputTemplate: "[{Timestamp:HH:mm} {Level}] {Message} {Properties}{NewLine}{Exception}"))
-                .WriteTo.Logger(lc => lc
-                    .Filter.ByIncludingOnly(evt =>
-                        evt.Properties.ContainsKey("Scope") &&
-                        evt.Properties["Scope"].ToString().Contains("nonexistent.com"))
-                    .WriteTo.File("logs/microsoft.log",
-                        rollingInterval: RollingInterval.Day,
-                        outputTemplate: "[{Timestamp:HH:mm} {Level}] {Message} {Properties}{NewLine}{Exception}"))
+                // Dynamic file path based on the `scope` property
+                .WriteTo.Map(
+                    keyPropertyName: "Domain", // Name of the property in log context
+                    defaultKey: "general",    // Default scope if property is missing
+                    configure: (scope, wt) => wt.File($"logs/{Regex.Replace(scope, @"[^a-zA-Z0-9-]", "_")}.log", 
+                    rollingInterval: RollingInterval.Day, outputTemplate: "[{Timestamp:HH:mm} {Level}] {Message}{NewLine}{Exception}"))
+                //.WriteTo.Logger(lc => lc
+                //    .Filter.ByIncludingOnly(evt =>
+                //        evt.Properties.ContainsKey("Scope") &&
+                //        evt.Properties["Scope"].ToString().Contains("google.com"))
+                //    .WriteTo.File("logs/google.log",
+                //        rollingInterval: RollingInterval.Day,
+                //        outputTemplate: "[{Timestamp:HH:mm} {Level}] {Message} {Properties}{NewLine}{Exception}"))
+                //.WriteTo.Logger(lc => lc
+                //    .Filter.ByIncludingOnly(evt =>
+                //        evt.Properties.ContainsKey("Scope") &&
+                //        evt.Properties["Scope"].ToString().Contains("microsoft.com"))
+                //    .WriteTo.File("logs/microsoft.log",
+                //        rollingInterval: RollingInterval.Day,
+                //        outputTemplate: "[{Timestamp:HH:mm} {Level}] {Message} {Properties}{NewLine}{Exception}"))
+                //.WriteTo.Logger(lc => lc
+                //    .Filter.ByIncludingOnly(evt =>
+                //        evt.Properties.ContainsKey("Scope") &&
+                //        evt.Properties["Scope"].ToString().Contains("example.com"))
+                //    .WriteTo.File("logs/google.log",
+                //        rollingInterval: RollingInterval.Day,
+                //        outputTemplate: "[{Timestamp:HH:mm} {Level}] {Message} {Properties}{NewLine}{Exception}"))
+                //.WriteTo.Logger(lc => lc
+                //    .Filter.ByIncludingOnly(evt =>
+                //        evt.Properties.ContainsKey("Scope") &&
+                //        evt.Properties["Scope"].ToString().Contains("nonexistent.com"))
+                //    .WriteTo.File("logs/microsoft.log",
+                //        rollingInterval: RollingInterval.Day,
+                //        outputTemplate: "[{Timestamp:HH:mm} {Level}] {Message} {Properties}{NewLine}{Exception}"))
                 // Error logger for failed crawls
                 //.WriteTo.Logger(lc => lc
                 //    .Filter.ByIncludingOnly(evt => evt.Level == LogEventLevel.Error)
